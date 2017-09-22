@@ -47,7 +47,10 @@ with tf.Session(config=config) as sess:
 			model = BILSTM_CRF(num_chars=num_chars, num_classes=num_classes, num_steps=num_steps, num_epochs=num_epochs, embedding_matrix=embedding_matrix, is_training=True)
 
 		print "training model"
-		tf.initialize_all_variables().run()
+#		tf.initialize_all_variables().run()
+#		tf.global_variables_initializer().run()
+		init_op = tf.global_variables_initializer()
+		sess.run(init_op)
 		model.train(sess, save_path, X_train, y_train, X_val, y_val)
 
 		print "final best f1 is: %f" % (model.max_f1)

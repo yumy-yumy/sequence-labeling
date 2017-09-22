@@ -2,7 +2,8 @@ import math
 import helper
 import numpy as np
 import tensorflow as tf
-from tensorflow.models.rnn import rnn, rnn_cell
+#from tensorflow.models.rnn import rnn, rnn_cell
+from tensorflow import nn
 
 class BILSTM_CRF(object):
     
@@ -11,8 +12,9 @@ class BILSTM_CRF(object):
         self.max_f1 = 0
         self.learning_rate = 0.002
         self.dropout_rate = 0.5
-        self.batch_size = 128
-        self.num_layers = 1   
+#        self.batch_size = 128
+        self.batch_size = 18
+        self.num_layers = 1
         self.emb_dim = 100
         self.hidden_dim = 100
         self.num_epochs = num_epochs
@@ -34,7 +36,9 @@ class BILSTM_CRF(object):
         self.inputs_emb = tf.nn.embedding_lookup(self.embedding, self.inputs)
         self.inputs_emb = tf.transpose(self.inputs_emb, [1, 0, 2])
         self.inputs_emb = tf.reshape(self.inputs_emb, [-1, self.emb_dim])
-        self.inputs_emb = tf.split(0, self.num_steps, self.inputs_emb)
+#        self.inputs_emb = tf.split(0, self.num_steps, self.inputs_emb)
+        self.inputs_emb = tf.split(self.inputs_emb, self.num_steps, 0)
+        self.inputs_emb = tf.reshape(self.inputs_emb, [self.batch_size, self.num_steps, self.emb_dim]) 
 
         # lstm cell
         lstm_cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_dim)
@@ -50,19 +54,28 @@ class BILSTM_CRF(object):
 
         # get the length of each sample
         self.length = tf.reduce_sum(tf.sign(self.inputs), reduction_indices=1)
-        self.length = tf.cast(self.length, tf.int32)  
+        self.length = tf.cast(self.length, tf.int32)
+
         
         # forward and backward
-        self.outputs, _, _ = rnn.bidirectional_rnn(
-            lstm_cell_fw, 
-            lstm_cell_bw,
-            self.inputs_emb, 
-            dtype=tf.float32,
-            sequence_length=self.length
+#        self.outputs, _, _ = rnn.bidirectional_rnn(
+#            lstm_cell_fw, 
+#            lstm_cell_bw,
+#            self.inputs_emb, 
+#            dtype=tf.float32,
+#            sequence_length=self.length
+#        )
+        self.outputs, _ = nn.bidirectional_dynamic_rnn(
+            cell_fw = lstm_cell_fw, 
+            cell_bw = lstm_cell_bw,
+            inputs = self.inputs_emb, 
+            sequence_length = self.length,
+            dtype = tf.float32
         )
         
         # softmax
-        self.outputs = tf.reshape(tf.concat(1, self.outputs), [-1, self.hidden_dim * 2])
+#        self.outputs = tf.reshape(tf.concat(1, self.outputs), [-1, self.hidden_dim * 2])
+        self.outputs = tf.reshape(tf.concat(self.outputs, 1), [-1, self.hidden_dim * 2])
         self.softmax_w = tf.get_variable("softmax_w", [self.hidden_dim * 2, self.num_classes])
         self.softmax_b = tf.get_variable("softmax_b", [self.num_classes])
         self.logits = tf.matmul(self.outputs, self.softmax_w) + self.softmax_b
@@ -75,15 +88,15 @@ class BILSTM_CRF(object):
             
             dummy_val = -1000
             class_pad = tf.Variable(dummy_val * np.ones((self.batch_size, self.num_steps, 1)), dtype=tf.float32)
-            self.observations = tf.concat(2, [self.tags_scores, class_pad])
-
+#            self.observations = tf.concat(2, [self.tags_scores, class_pad])
+            self.observations = tf.concat([self.tags_scores, class_pad], 2)
             begin_vec = tf.Variable(np.array([[dummy_val] * self.num_classes + [0] for _ in range(self.batch_size)]), trainable=False, dtype=tf.float32)
             end_vec = tf.Variable(np.array([[0] + [dummy_val] * self.num_classes for _ in range(self.batch_size)]), trainable=False, dtype=tf.float32) 
             begin_vec = tf.reshape(begin_vec, [self.batch_size, 1, self.num_classes + 1])
             end_vec = tf.reshape(end_vec, [self.batch_size, 1, self.num_classes + 1])
 
-            self.observations = tf.concat(1, [begin_vec, self.observations, end_vec])
-
+#            self.observations = tf.concat(1, [begin_vec, self.observations, end_vec])
+            self.observations = tf.concat([begin_vec, self.observations, end_vec], 1)
             self.mask = tf.cast(tf.reshape(tf.sign(self.targets),[self.batch_size * self.num_steps]), tf.float32)
             
             # point score
@@ -103,8 +116,10 @@ class BILSTM_CRF(object):
             self.loss = - (self.target_path_score - self.total_path_score)
         
         # summary
-        self.train_summary = tf.scalar_summary("loss", self.loss)
-        self.val_summary = tf.scalar_summary("loss", self.loss)        
+#        self.train_summary = tf.scalar_summary("loss", self.loss)
+#        self.val_summary = tf.scalar_summary("loss", self.loss)
+        self.train_summary = tf.summary.scalar("loss", self.loss)
+        self.val_summary = tf.summary.scalar("loss", self.loss)        
         
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss) 
 
@@ -115,7 +130,8 @@ class BILSTM_CRF(object):
 
     def forward(self, observations, transitions, length, is_viterbi=True, return_best_seq=True):
         length = tf.reshape(length, [self.batch_size])
-        transitions = tf.reshape(tf.concat(0, [transitions] * self.batch_size), [self.batch_size, 6, 6])
+#        transitions = tf.reshape(tf.concat(0, [transitions] * self.batch_size), [self.batch_size, 6, 6])
+        transitions = tf.reshape(tf.concat([transitions] * self.batch_size, 0), [self.batch_size, 6, 6])
         observations = tf.reshape(observations, [self.batch_size, self.num_steps + 2, 6, 1])
         observations = tf.transpose(observations, [1, 0, 2, 3])
         previous = observations[0, :, :, :]
@@ -133,15 +149,18 @@ class BILSTM_CRF(object):
             alphas.append(alpha_t)
             previous = alpha_t           
             
-        alphas = tf.reshape(tf.concat(0, alphas), [self.num_steps + 2, self.batch_size, 6, 1])
+#        alphas = tf.reshape(tf.concat(0, alphas), [self.num_steps + 2, self.batch_size, 6, 1])
+        alphas = tf.reshape(tf.concat(alphas, 0), [self.num_steps + 2, self.batch_size, 6, 1])
         alphas = tf.transpose(alphas, [1, 0, 2, 3])
         alphas = tf.reshape(alphas, [self.batch_size * (self.num_steps + 2), 6, 1])
 
         last_alphas = tf.gather(alphas, tf.range(0, self.batch_size) * (self.num_steps + 2) + length)
         last_alphas = tf.reshape(last_alphas, [self.batch_size, 6, 1])
 
-        max_scores = tf.reshape(tf.concat(0, max_scores), (self.num_steps + 1, self.batch_size, 6))
-        max_scores_pre = tf.reshape(tf.concat(0, max_scores_pre), (self.num_steps + 1, self.batch_size, 6))
+#        max_scores = tf.reshape(tf.concat(0, max_scores), (self.num_steps + 1, self.batch_size, 6))
+#        max_scores_pre = tf.reshape(tf.concat(0, max_scores_pre), (self.num_steps + 1, self.batch_size, 6))
+        max_scores = tf.reshape(tf.concat(max_scores, 0), (self.num_steps + 1, self.batch_size, 6))
+        max_scores_pre = tf.reshape(tf.concat(max_scores_pre, 0), (self.num_steps + 1, self.batch_size, 6))
         max_scores = tf.transpose(max_scores, [1, 0, 2])
         max_scores_pre = tf.transpose(max_scores_pre, [1, 0, 2])
 
@@ -153,9 +172,12 @@ class BILSTM_CRF(object):
         char2id, id2char = helper.loadMap("char2id")
         label2id, id2label = helper.loadMap("label2id")
 
-        merged = tf.merge_all_summaries()
-        summary_writer_train = tf.train.SummaryWriter('loss_log/train_loss', sess.graph)  
-        summary_writer_val = tf.train.SummaryWriter('loss_log/val_loss', sess.graph)     
+#        merged = tf.merge_all_summaries()
+        merged = tf.summary.merge_all()
+#        summary_writer_train = tf.train.SummaryWriter('loss_log/train_loss', sess.graph)  
+#        summary_writer_val = tf.train.SummaryWriter('loss_log/val_loss', sess.graph)
+        summary_writer_train = tf.summary.FileWriter('loss_log/train_loss', sess.graph)  
+        summary_writer_val = tf.summary.FileWriter('loss_log/val_loss', sess.graph)             
         
         num_iterations = int(math.ceil(1.0 * len(X_train) / self.batch_size))
 
