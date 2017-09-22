@@ -53,7 +53,7 @@ The first line of the embedding file is the number of char and embedding dimensi
 
 # Installation Dependencies
 - python 2.7
-- tensorflow 0.8
+- tensorflow 1.2
 - numpy
 - pandas
 
